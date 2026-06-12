@@ -1,0 +1,109 @@
+# =============================================================
+#  진동 베어링 이상탐지 — 전체 설정 파일
+#  모든 "숫자/선택"은 여기 한 곳에 모은다 (재현성·실험 편의).
+#  코드 곳곳에 숫자를 흩뿌리지 않기 위함.
+# =============================================================
+
+# ---- 재현성 ----
+seed: 42            # 난수 시드 고정 (numpy·torch)
+device: auto        # auto / cuda / cpu  (auto = GPU 있으면 cuda, 없으면 cpu)
+
+# =============================================================
+#  데이터 경로
+# =============================================================
+data:
+  # 정상 — 학습·임계값 설정에 쓰는 유일한 데이터
+  raw_normal: data/raw/normal
+
+  # 고장 — 평가 전용(학습 금지!). 소스마다 샘플링 주파수·가속도계 위치가 다르다.
+  #   sampling_rate : 48000(48k) / 12000(12k)
+  #   mat_key       : DE_time(Drive End) / FE_time(Fan End)  — .mat 변수 접미사
+  fault_sources:
+    - { name: fault_48k,     path: data/raw/fault_48k,     sampling_rate: 48000, mat_key: DE_time }
+    - { name: fault_12k,     path: data/raw/fault_12k,     sampling_rate: 12000, mat_key: DE_time }
+    - { name: fan_end_fault, path: data/raw/fan_end_fault, sampling_rate: 48000, mat_key: FE_time }
+
+  # 정상 데이터의 가속도계 위치
+  normal_mat_key: DE_time
+
+  # 파생 데이터 저장 위치
+  processed:    data/processed       # 윈도우 슬라이싱 배열
+  features:     data/features        # 모델 입력용 스펙트로그램 .npy
+  spectrograms: data/spectrograms    # 사람이 볼 시각화 이미지(학습 미사용)
+  splits:       data/splits          # train/val/test 분리 정보
+
+# =============================================================
+#  신호 / 윈도우
+#  기준 샘플링은 48kHz. 1회전 ≈ 1600포인트(1750rpm, 48kHz).
+#  12k 소스는 회전당 포인트가 달라 전처리에서 공통 시간길이로 맞춘다.
+# =============================================================
+signal:
+  base_sampling_rate: 48000   # 경로 B(오토인코더)의 기준 샘플링
+window:
+  length: 1600                # 한 윈도우 길이(포인트) ≈ 회전 1바퀴 @48k
+  overlap: 0.5                # 윈도우 겹침 비율 (0.5 = 절반씩 겹침)
+
+# ---- 정규화 ----
+# 통계는 "정상 train"에서만 계산해 models/scaler.pkl 로 저장 후 재사용 (누수 차단)
+normalize:
+  method: zscore              # zscore = (x - 평균) / 표준편차
+
+# =============================================================
+#  경로 A — 통계 임펄스 탐지기
+# =============================================================
+stats:
+  features: [kurtosis, crest_factor, rms, peak]  # 뽑을 특징들
+  threshold_rule: percentile  # percentile / mean_std
+  threshold_percentile: 99    # 정상 분포 상위 99% 를 임계값으로
+  threshold_sigma: 3          # mean_std 일 때 평균 + Nσ
+
+# =============================================================
+#  경로 B — 디노이징 오토인코더 (스펙트로그램 입력)
+# =============================================================
+spectrogram:
+  transform: stft             # stft / cwt
+  n_fft: 256                  # STFT 윈도우 크기 (시간↔주파수 해상도 트레이드오프)
+  hop_length: 64              # STFT 겹침(이동) 크기
+  log_scale: true             # 진폭 로그(dB) 스케일 (작은 변화도 살리기)
+ae:
+  noise_std: 0.1              # 디노이징용 노이즈 강도 (튜닝 대상)
+  epochs: 30
+  batch_size: 64
+  lr: 0.001
+  threshold_rule: mean_std    # 정상 재구성오차 분포 기반
+  threshold_sigma: 3
+
+# =============================================================
+#  경로 C — 고장 유형 CNN 분류기 (지도학습)
+#  A·B 융합이 '이상'일 때만 호출되는 게이트형. 멀티 샘플링 rate 입력.
+# =============================================================
+cnn:
+  classes: [IR, OR, B]        # 내륜 / 외륜 / 볼
+  epochs: 30
+  batch_size: 64
+  lr: 0.001
+  val_ratio: 0.2              # 층화 분할 검증 비율
+
+# =============================================================
+#  융합 / 판정
+# =============================================================
+fusion:
+  rule: or                    # or / weighted
+  weights: { a: 0.5, b: 0.5 } # rule=weighted 일 때 가중치
+  debounce_n: 3               # 연속 N 윈도우 이상일 때만 알람 (오탐 억제)
+
+# =============================================================
+#  산출물 저장 경로
+# =============================================================
+artifacts:
+  models:     models                 # *.pth / scaler.pkl / thresholds.json
+  scaler:     models/scaler.pkl      # 정규화 통계
+  thresholds: models/thresholds.json # A·B 임계값 + 산정 근거
+  outputs:    outputs                # figures / heatmaps / reports
+
+# =============================================================
+#  도메인 가정 (다루는 운전 조건 범위) — 범위 밖은 향후 과제
+# =============================================================
+domain:
+  load_hp: 2                  # 모터 부하 2 HP
+  rpm: 1750                   # 회전수
