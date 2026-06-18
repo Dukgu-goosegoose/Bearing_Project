@@ -1,0 +1,14 @@
+# 진동 베어링 이상탐지 ? 필요 라이브러리
+# 설치:  .venv\Scripts\python.exe -m pip install -r requirements.txt
+# (torch 는 CPU 버전. 나중에 GPU 쓰려면 README 참고)
+
+numpy
+scipy
+matplotlib
+scikit-learn
+pyyaml
+tqdm
+torch
+torchvision        # 경로 C: MobileNetV2 전이학습 (팀원 cnn_fault_classifier)
+opencv-python      # 경로 C: 스펙트로그램 이미지 리사이즈 (cv2)
+streamlit          # 대시보드 (app.py)streamlit run app.py

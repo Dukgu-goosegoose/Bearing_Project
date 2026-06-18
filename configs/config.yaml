@@ -1,0 +1,116 @@
+# =============================================================
+#  진동 베어링 이상탐지 — 전체 설정 파일
+#  모든 "숫자/선택"은 여기 한 곳에 모은다 (재현성·실험 편의).
+#  코드 곳곳에 숫자를 흩뿌리지 않기 위함.
+# =============================================================
+
+# ---- 재현성 ----
+seed: 42            # 난수 시드 고정 (numpy·torch)
+device: auto        # auto / cuda / cpu  (auto = GPU 있으면 cuda, 없으면 cpu)
+
+# =============================================================
+#  데이터 경로
+# =============================================================
+data:
+  # 12k 통일: 모든 신호를 target_rate(12kHz)로 맞춰서 파이프라인을 단일화한다.
+  #   - 48k 소스는 로더에서 12k로 다운샘플(안티앨리어싱 포함)
+  #   - 12k 소스는 그대로
+  target_rate: 12000
+
+  # 정상 — 학습·임계값 설정에 쓰는 유일한 데이터 (원본 48k → 12k 다운샘플)
+  raw_normal: data/raw/normal
+  normal_sampling_rate: 48000   # 원본 샘플링(다운샘플 전)
+  normal_mat_key: DE_time       # 정상 데이터의 가속도계 위치
+
+  # 고장 — 평가 전용(학습 금지!). 소스마다 원본 샘플링·가속도계 위치가 다르다.
+  #   sampling_rate : 원본 샘플링 (48000은 12k로 다운샘플됨)
+  #   mat_key       : DE_time(Drive End) / FE_time(Fan End)  — .mat 변수 접미사
+  fault_sources:
+    - { name: fault_12k,     path: data/raw/fault_12k,     sampling_rate: 12000, mat_key: DE_time }
+    - { name: fan_end_fault, path: data/raw/fan_end_fault, sampling_rate: 12000, mat_key: FE_time }
+    - { name: fault_48k,     path: data/raw/fault_48k,     sampling_rate: 48000, mat_key: DE_time }
+
+  # 파생 데이터 저장 위치
+  processed:    data/processed       # 윈도우 슬라이싱 배열
+  features:     data/features        # 모델 입력용 스펙트로그램 .npy
+  spectrograms: data/spectrograms    # 사람이 볼 시각화 이미지(학습 미사용)
+  splits:       data/splits          # train/val/test 분리 정보
+
+# =============================================================
+#  신호 / 윈도우
+#  파이프라인 기준 샘플링 = 12kHz (모든 신호를 여기 맞춤).
+#  12k에서 1회전 ≈ 400포인트(1750rpm).
+# =============================================================
+signal:
+  base_sampling_rate: 12000   # 파이프라인 기준 샘플링(=target_rate)
+window:
+  length: 1024                # [경로 A·B] 한 윈도우 길이(포인트) ≈ 2.5회전 @12k (다혜)
+  length_c: 2048              # [경로 C] 물리·CNN 윈도우 ≈5회전 @12k (엄선우) — 엔벨로프 해상도 확보
+  overlap: 0.5                # 윈도우 겹침 비율 (0.5 = 절반씩 겹침)  ※ A·B·C 공통
+
+# ---- 정규화 ----
+# 통계는 "정상 train"에서만 계산해 models/scaler.pkl 로 저장 후 재사용 (누수 차단)
+normalize:
+  method: zscore              # zscore = (x - 평균) / 표준편차
+
+# =============================================================
+#  경로 A — 통계 임펄스 탐지기
+# =============================================================
+stats:
+  features: [kurtosis, crest_factor, rms, peak]  # 뽑을 특징들
+  threshold_rule: percentile  # percentile / mean_std
+  threshold_percentile: 99    # 정상 분포 상위 99% 를 임계값으로
+  threshold_sigma: 3          # mean_std 일 때 평균 + Nσ
+
+# =============================================================
+#  경로 B — 디노이징 오토인코더 (스펙트로그램 입력)
+# =============================================================
+spectrogram:
+  transform: stft             # stft / cwt
+  n_fft: 256                  # STFT 윈도우 크기 (시간↔주파수 해상도 트레이드오프)
+  hop_length: 32              # STFT 이동 크기. 1024 윈도우 → (129, 25) 스펙트로그램
+  log_scale: true             # 진폭 로그(dB) 스케일 (작은 변화도 살리기)
+ae:
+  noise_std: 0.1              # 디노이징용 노이즈 강도 (튜닝 대상)
+  epochs: 30
+  batch_size: 64
+  lr: 0.001
+  threshold_rule: mean_std    # 정상 재구성오차 분포 기반
+  threshold_sigma: 3
+
+# =============================================================
+#  경로 C — 고장 유형 CNN 분류기 (지도학습)
+#  A·B 융합이 '이상'일 때만 호출되는 게이트형.
+# =============================================================
+cnn:
+  classes: [IR, OR, B]        # 내륜 / 외륜 / 볼
+  epochs: 30
+  batch_size: 64
+  lr: 0.001
+  val_ratio: 0.2              # 층화 분할 검증 비율
+
+# =============================================================
+#  융합 / 판정
+# =============================================================
+fusion:
+  rule: or                    # or / weighted
+  weights: { a: 0.5, b: 0.5 } # rule=weighted 일 때 가중치
+  debounce_n: 3               # 연속 N 윈도우 이상일 때만 알람 (오탐 억제)
+
+# =============================================================
+#  산출물 저장 경로
+# =============================================================
+artifacts:
+  models:     models                 # *.pth / scaler.pkl / thresholds.json
+  scaler:     models/scaler.pkl      # 정규화 통계
+  thresholds: models/thresholds.json # A·B 임계값 + 산정 근거
+  outputs:    outputs                # figures / heatmaps / reports
+
+# =============================================================
+#  도메인 가정 (다루는 운전 조건 범위) — 범위 밖은 향후 과제
+#  멀티 로드(0~3HP) 학습/평가. 로드별 회전수가 조금씩 다름.
+# =============================================================
+domain:
+  load_hp: [0, 1, 2, 3]       # 모터 부하 (HP)
+  rpm_by_load: { 0: 1797, 1: 1772, 2: 1750, 3: 1730 }  # 로드별 회전수
+  rpm: 1750                   # [경로 C] 물리 진단 기본 회전수(엄선우). 추후 rpm_by_load[load]로 정밀화 가능
