@@ -8,6 +8,13 @@
 seed: 42            # 난수 시드 고정 (numpy·torch)
 device: auto        # auto / cuda / cpu  (auto = GPU 있으면 cuda, 없으면 cpu)
 
+# ---- 기계 프로필 ----
+# configs/machines/{machine}.yaml 를 이 위에 덮어써서 기계를 전환한다.
+#   null   = 기본(이 파일의 CWRU 값 그대로)
+#   ottawa = configs/machines/ottawa.yaml 로 fs·베어링·rpm·라벨 교체
+# 코드는 load_config(machine="ottawa") 또는 웹에서 선택값으로 넘긴다.
+machine: null
+
 # =============================================================
 #  데이터 경로
 # =============================================================
@@ -21,6 +28,10 @@ data:
   raw_normal: data/raw/normal
   normal_sampling_rate: 48000   # 원본 샘플링(다운샘플 전)
   normal_mat_key: DE_time       # 정상 데이터의 가속도계 위치
+
+  # 고장 파일명에서 (위치, 크기)를 뽑는 정규식 — 데이터셋마다 작명법이 다르므로 프로필값.
+  #   CWRU: IR007 / OR021 / B028  →  "(IR|OR|B)(\d{3})"
+  fault_label_pattern: "(IR|OR|B)(\\d{3})"
 
   # 고장 — 평가 전용(학습 금지!). 소스마다 원본 샘플링·가속도계 위치가 다르다.
   #   sampling_rate : 원본 샘플링 (48000은 12k로 다운샘플됨)
@@ -105,6 +116,24 @@ artifacts:
   scaler:     models/scaler.pkl      # 정규화 통계
   thresholds: models/thresholds.json # A·B 임계값 + 산정 근거
   outputs:    outputs                # figures / heatmaps / reports
+
+# =============================================================
+#  경로 C — 베어링 기하 (물리 결함주파수 계산용) — 기계마다 다름(프로필)
+#  BPFI/BPFO/BSF = f(N, Bd, Pd, α, rpm).  ✅ Smith & Randall(2015) 검증값(CWRU).
+# =============================================================
+bearing:
+  name: "SKF 6205-2RS JEM"
+  N: 9            # 볼 개수
+  Bd_mm: 7.938    # 볼 지름(mm)
+  Pd_mm: 39.04    # 피치 지름(mm)
+  alpha_deg: 0.0  # 접촉각(도)
+
+# ---- 라벨 가용성 ----
+# 고장 라벨(정답표)이 있는 데이터셋인가? → 경로 C② CNN 작동 가능 여부를 가른다.
+#   true  = CNN 학습/교차검증 가능 (CWRU·Ottawa)
+#   false = CNN 은 ⚪ 정보없음 → 물리(①) 단독 진단
+labels:
+  has_fault_labels: true
 
 # =============================================================
 #  도메인 가정 (다루는 운전 조건 범위) — 범위 밖은 향후 과제

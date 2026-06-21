@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>베어링 고장 진단 콘솔</title>
+<style>
+  :root{
+    --bg:#14161b; --panel:#1c1f26; --panel2:#232730; --line:#2e333d;
+    --cream:#FFFFD4; --text:#e9eaee; --muted:#99a0ac;
+    --green:#5fd08a; --amber:#f5c451; --red:#ef6b6b; --blue:#7aa7e6;
+    --mono:ui-monospace,Consolas,"Courier New",monospace;
+    --sans:system-ui,"Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--sans);
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+    padding:28px 24px 60px; max-width:1080px; margin:0 auto;
+  }
+  /* ---- header ---- */
+  header{display:flex; align-items:baseline; justify-content:space-between;
+    gap:16px; border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:24px; flex-wrap:wrap}
+  .title{font-size:22px; font-weight:700; letter-spacing:-.02em}
+  .title small{display:block; font-size:12px; font-weight:400; color:var(--muted);
+    font-family:var(--mono); letter-spacing:.04em; margin-top:3px}
+  .status{font-family:var(--mono); font-size:12px; color:var(--muted);
+    display:flex; align-items:center; gap:8px}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
+  .dot.on{background:var(--green); box-shadow:0 0 0 0 rgba(95,208,138,.6); animation:pulse 2s infinite}
+  .dot.off{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(95,208,138,.5)}70%{box-shadow:0 0 0 7px rgba(95,208,138,0)}100%{box-shadow:0 0 0 0 rgba(95,208,138,0)}}
+
+  /* ---- pick ---- */
+  .eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--muted); margin:0 0 10px}
+  .groups{display:grid; grid-template-columns:1fr; gap:18px; margin-bottom:14px}
+  @media(min-width:640px){.groups{grid-template-columns:3fr 1fr}}
+  .chiprow{display:flex; flex-wrap:wrap; gap:8px}
+  .chip{font-family:var(--mono); font-size:12px; cursor:pointer;
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:8px 11px; transition:.12s; display:flex; gap:7px; align-items:center}
+  .chip:hover{border-color:var(--cream); background:var(--panel2)}
+  .chip .tag{font-size:10px; color:var(--bg); background:var(--muted); border-radius:4px; padding:1px 5px; font-weight:700}
+  .chip.f .tag{background:var(--amber)}
+  .chip.n .tag{background:var(--green)}
+  .chip[aria-busy=true]{opacity:.5; pointer-events:none}
+  .upload{display:flex; align-items:center}
+  .upload label{font-family:var(--mono); font-size:12px; cursor:pointer; width:100%;
+    border:1px dashed var(--line); border-radius:7px; padding:8px 11px; color:var(--muted); text-align:center; transition:.12s}
+  .upload label:hover{border-color:var(--cream); color:var(--text)}
+  .upload input{display:none}
+
+  /* ---- stage ---- */
+  .stage{margin-top:22px; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel)}
+  .scope{position:relative; height:190px; background:
+    linear-gradient(var(--panel2),#191c22);
+    border-bottom:1px solid var(--line)}
+  .scope canvas{display:block; width:100%; height:100%}
+  .scope .scopelabel{position:absolute; top:10px; left:14px; font-family:var(--mono);
+    font-size:11px; color:var(--muted); letter-spacing:.05em}
+  .scope .sweep{position:absolute; top:0; bottom:0; width:2px; background:var(--cream);
+    opacity:0; box-shadow:0 0 12px var(--cream)}
+  .scanning .sweep{animation:sweep 1.1s linear infinite; opacity:.9}
+  @keyframes sweep{from{left:0}to{left:100%}}
+
+  .readout{padding:26px 24px}
+  .placeholder{color:var(--muted); font-family:var(--mono); font-size:13px; text-align:center; padding:14px 0}
+
+  .verdict{display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap}
+  .vmain{flex:1; min-width:240px}
+  .vstate{font-family:var(--mono); font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+  .vpart{font-size:44px; font-weight:800; letter-spacing:-.03em; margin:2px 0 2px; line-height:1.05}
+  .vpart.normal{color:var(--green)} .vpart.fault{color:var(--red)} .vpart.review{color:var(--amber)}
+  .vsub{color:var(--muted); font-size:14px}
+  .vsub b{color:var(--text)}
+  .conf{min-width:150px; text-align:right}
+  .conf .n{font-size:40px; font-weight:800; font-family:var(--mono); letter-spacing:-.02em}
+  .conf .l{font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+
+  .truth{margin-top:14px; font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .truth .ok{color:var(--green)} .truth .no{color:var(--red)}
+
+  /* ---- crosscheck ---- */
+  .xcheck{margin-top:24px; border-top:1px solid var(--line); padding-top:20px}
+  .xhead{display:flex; align-items:center; gap:10px; margin-bottom:14px}
+  .xhead h3{margin:0; font-size:14px; font-weight:700}
+  .xhead .why{font-size:12px; color:var(--muted)}
+  .badge{font-family:var(--mono); font-size:12px; font-weight:700; border-radius:6px; padding:3px 9px}
+  .badge.agree{background:rgba(95,208,138,.16); color:var(--green)}
+  .badge.disagree{background:rgba(245,196,81,.16); color:var(--amber)}
+  .badge.solo{background:rgba(122,167,230,.16); color:var(--blue)}
+  .twocol{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .src{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+  .src .k{font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  .src .v{font-size:22px; font-weight:700; margin-top:4px}
+  .src .d{font-size:12px; color:var(--muted); margin-top:2px}
+  .stats{display:flex; gap:22px; margin-top:18px; flex-wrap:wrap}
+  .stat{font-family:var(--mono)} .stat .num{font-size:18px; font-weight:700}
+  .stat .cap{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em}
+
+  .err{color:var(--red); font-family:var(--mono); font-size:13px; padding:14px 0}
+  footer{margin-top:22px; font-family:var(--mono); font-size:11px; color:var(--muted); text-align:center}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="title">베어링 고장 진단 콘솔
+    <small>UORED-VAFCLS · 진동 기반 4유형 진단 + 물리·CNN 교차검증</small>
+  </div>
+  <div class="status"><span id="dot" class="dot"></span><span id="statxt">연결 확인 중…</span></div>
+</header>
+
+<main>
+  <p class="eyebrow">진단할 신호 선택</p>
+  <div class="groups">
+    <div>
+      <div id="examples" class="chiprow"><span class="placeholder">예시 불러오는 중…</span></div>
+    </div>
+    <div class="upload">
+      <label>CSV 업로드
+        <input id="file" type="file" accept=".csv">
+      </label>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="scope" id="scope">
+      <span class="scopelabel" id="scopelabel">진동 파형</span>
+      <span class="sweep"></span>
+      <canvas id="wave"></canvas>
+    </div>
+    <div class="readout" id="readout">
+      <div class="placeholder">위에서 신호를 선택하면 진단 결과가 여기 표시됩니다.</div>
+    </div>
+  </div>
+</main>
+
+<footer>로컬 진단 서버에 연결됨 · 발표 데모</footer>
+
+<script>
+const API = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : location.origin;
+const PART = {I:'내륜', O:'외륜', B:'볼', C:'케이지'};
+const PART_EN = {I:'Inner race', O:'Outer race', B:'Ball', C:'Cage'};
+const XLABEL = {agree:['일치','agree'], disagree:['불일치','disagree'],
+                physics_only:['물리 단독','solo'], cnn_only:['CNN 단독','solo']};
+
+const $ = s => document.querySelector(s);
+const canvas = $('#wave'), ctx = canvas.getContext('2d');
+
+/* ---- API 연결 확인 ---- */
+async function checkApi(){
+  try{
+    const r = await fetch(API + '/');
+    const d = await r.json();
+    $('#dot').className = 'dot on';
+    $('#statxt').textContent = '서버 연결됨 · ' + (d.machine || '');
+    loadExamples();
+  }catch(e){
+    $('#dot').className = 'dot off';
+    $('#statxt').textContent = '서버 미연결 (uvicorn 실행 확인)';
+    $('#examples').innerHTML = '<span class="placeholder">서버에 연결되면 예시가 표시됩니다.</span>';
+  }
+}
+
+/* ---- 예시 버튼 ---- */
+async function loadExamples(){
+  const r = await fetch(API + '/examples');
+  const d = await r.json();
+  const box = $('#examples'); box.innerHTML = '';
+  d.examples.forEach(ex => {
+    const c = document.createElement('button');
+    const isFault = ex.type === 'fault';
+    c.className = 'chip ' + (isFault ? 'f' : 'n');
+    const tag = isFault ? PART[ex.truth] : '정상';
+    c.innerHTML = `<span class="tag">${tag}</span>${ex.name}`;
+    c.onclick = () => diagnoseExample(ex.name, c);
+    box.appendChild(c);
+  });
+}
+
+/* ---- 진단 호출 ---- */
+async function diagnoseExample(name, chip){
+  startScan();
+  if(chip) chip.setAttribute('aria-busy','true');
+  try{
+    const r = await fetch(API + '/diagnose_example', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name})
+    });
+    if(!r.ok) throw new Error('진단 실패 ('+r.status+')');
+    render(await r.json());
+  }catch(e){ showErr(e.message); }
+  finally{ stopScan(); if(chip) chip.removeAttribute('aria-busy'); }
+}
+
+async function diagnoseUpload(file){
+  startScan();
+  try{
+    const text = await file.text();
+    const lines = text.split(/\r?\n/);
+    const header = lines[0].split(',').map(s=>s.trim());
+    let col = header.indexOf('Accelerometer');
+    if(col < 0) col = 0;                         // 헤더 없으면 첫 열
+    const sig = [];
+    for(let i=1; i<lines.length && sig.length<80000; i++){
+      if(!lines[i]) continue;
+      const v = parseFloat(lines[i].split(',')[col]);
+      if(!isNaN(v)) sig.push(v);
+    }
+    if(!sig.length) throw new Error('Accelerometer 값을 못 읽었습니다.');
+    const r = await fetch(API + '/diagnose', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({signal: sig})
+    });
+    if(!r.ok) throw new Error('진단 실패 ('+r.status+')');
+    render(await r.json());
+  }catch(e){ showErr(e.message); }
+  finally{ stopScan(); }
+}
+
+/* ---- 결과 렌더 ---- */
+function render(d){
+  drawWave(d.preview || []);
+  $('#scopelabel').textContent = '진동 파형 · ' + (d.name || '신호');
+
+  const diag = d.diagnosis;
+  let stateTxt, partTxt, partCls, sub, confTxt;
+
+  if(!d.is_anomaly){
+    stateTxt='판정'; partTxt='정상'; partCls='normal';
+    sub='이상 신호 없음 — 경로 A·B 임계값 이내'; confTxt='—';
+  }else if(diag && diag.fault_location){
+    stateTxt='고장 감지 · 유형'; partTxt=PART[diag.fault_location]||diag.fault_location;
+    partCls='fault'; sub=`${PART_EN[diag.fault_location]||''} 결함`;
+    confTxt = diag.confidence!=null ? Math.round(diag.confidence*100)+'%' : '—';
+  }else{
+    stateTxt='이상 감지'; partTxt='유형 검토 필요'; partCls='review';
+    sub='물리·CNN 진단이 엇갈려 단정 보류'; confTxt='—';
+  }
+
+  let truthHtml='';
+  if(d.truth){
+    if(d.truth==='정상'){
+      const ok = !d.is_anomaly;
+      truthHtml = `정답: 정상 · 진단 ${ok?'<span class="ok">정확 ✓</span>':'<span class="no">오탐 ✕</span>'}`;
+    }else{
+      const ok = diag && diag.fault_location===d.truth;
+      truthHtml = `정답: ${PART[d.truth]||d.truth} · 진단 ${ok?'<span class="ok">정확 ✓</span>':'<span class="no">불일치 ✕</span>'}`;
+    }
+  }
+
+  let xhtml='';
+  if(diag){
+    const [xtxt,xcls] = XLABEL[diag.cross_check] || [diag.cross_check,'solo'];
+    const pl = diag.physics_location, cl = diag.cnn_location;
+    xhtml = `
+    <div class="xcheck">
+      <div class="xhead">
+        <h3>물리 vs CNN 교차검증</h3>
+        <span class="badge ${xcls}">${xtxt}</span>
+        <span class="why">— 출처가 다른 두 진단이 같은 위치를 가리키면 신뢰도↑</span>
+      </div>
+      <div class="twocol">
+        <div class="src">
+          <div class="k">① 물리 진단 (공식·엔벨로프)</div>
+          <div class="v">${pl?(PART[pl]||pl):'미검출'}</div>
+          <div class="d">결함 주파수 기반 · 학습 불필요</div>
+        </div>
+        <div class="src">
+          <div class="k">② CNN 진단 (학습 모델)</div>
+          <div class="v">${cl?(PART[cl]||cl):'—'}</div>
+          <div class="d">스펙트로그램 이미지 분류</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  $('#readout').innerHTML = `
+    <div class="verdict">
+      <div class="vmain">
+        <div class="vstate">${stateTxt}</div>
+        <div class="vpart ${partCls}">${partTxt}</div>
+        <div class="vsub">${sub}</div>
+        ${truthHtml?`<div class="truth">${truthHtml}</div>`:''}
+      </div>
+      <div class="conf">
+        <div class="n">${confTxt}</div>
+        <div class="l">신뢰도</div>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="num">${d.n_windows}</div><div class="cap">윈도우</div></div>
+      <div class="stat"><div class="num">${d.n_alarm}</div><div class="cap">알람</div></div>
+      <div class="stat"><div class="num">${d.is_anomaly?'이상':'정상'}</div><div class="cap">융합 판정</div></div>
+    </div>
+    ${xhtml}`;
+}
+
+function showErr(msg){ $('#readout').innerHTML = `<div class="err">⚠ ${msg}</div>`; }
+
+/* ---- 파형 그리기 ---- */
+function sizeCanvas(){
+  const r = $('#scope').getBoundingClientRect();
+  canvas.width = r.width * devicePixelRatio;
+  canvas.height = r.height * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+function drawWave(data){
+  sizeCanvas();
+  const W = canvas.width/devicePixelRatio, H = canvas.height/devicePixelRatio;
+  ctx.clearRect(0,0,W,H);
+  // 그리드
+  ctx.strokeStyle='rgba(255,255,255,.05)'; ctx.lineWidth=1;
+  for(let i=1;i<4;i++){const y=H*i/4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();}
+  if(!data.length) return;
+  let mx=0; for(const v of data) mx=Math.max(mx,Math.abs(v)); mx=mx||1;
+  const mid=H/2, amp=H*0.42;
+  ctx.beginPath(); ctx.lineWidth=1.4; ctx.strokeStyle='#FFFFD4';
+  ctx.shadowColor='rgba(255,255,212,.5)'; ctx.shadowBlur=6;
+  data.forEach((v,i)=>{
+    const x=i/(data.length-1)*W, y=mid-(v/mx)*amp;
+    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  });
+  ctx.stroke(); ctx.shadowBlur=0;
+}
+function startScan(){ $('#scope').classList.add('scanning'); }
+function stopScan(){ $('#scope').classList.remove('scanning'); }
+
+$('#file').onchange = e => { if(e.target.files[0]) diagnoseUpload(e.target.files[0]); };
+window.addEventListener('resize', ()=>{ /* 마지막 파형 유지 안 함(간단화) */ });
+checkApi();
+</script>
+</body>
+</html>
