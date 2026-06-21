@@ -108,7 +108,7 @@
 <body>
 <header>
   <div class="title">베어링 고장 진단 콘솔
-    <small>UORED-VAFCLS · 진동 기반 4유형 진단 + 물리·CNN 교차검증</small>
+    <small>CWRU · 진동 기반 3유형(내륜·외륜·볼) 진단 + 물리·CNN 교차검증</small>
   </div>
   <div class="status"><span id="dot" class="dot"></span><span id="statxt">연결 확인 중…</span></div>
 </header>
@@ -120,8 +120,8 @@
       <div id="examples" class="chiprow"><span class="placeholder">예시 불러오는 중…</span></div>
     </div>
     <div class="upload">
-      <label>CSV 업로드
-        <input id="file" type="file" accept=".csv">
+      <label>.mat 업로드
+        <input id="file" type="file" accept=".mat">
       </label>
     </div>
   </div>
@@ -142,8 +142,8 @@
 
 <script>
 const API = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : location.origin;
-const PART = {I:'내륜', O:'외륜', B:'볼', C:'케이지'};
-const PART_EN = {I:'Inner race', O:'Outer race', B:'Ball', C:'Cage'};
+const PART = {IR:'내륜', OR:'외륜', B:'볼'};
+const PART_EN = {IR:'Inner race', OR:'Outer race', B:'Ball'};
 const XLABEL = {agree:['일치','agree'], disagree:['불일치','disagree'],
                 physics_only:['물리 단독','solo'], cnn_only:['CNN 단독','solo']};
 
@@ -199,23 +199,13 @@ async function diagnoseExample(name, chip){
 async function diagnoseUpload(file){
   startScan();
   try{
-    const text = await file.text();
-    const lines = text.split(/\r?\n/);
-    const header = lines[0].split(',').map(s=>s.trim());
-    let col = header.indexOf('Accelerometer');
-    if(col < 0) col = 0;                         // 헤더 없으면 첫 열
-    const sig = [];
-    for(let i=1; i<lines.length && sig.length<80000; i++){
-      if(!lines[i]) continue;
-      const v = parseFloat(lines[i].split(',')[col]);
-      if(!isNaN(v)) sig.push(v);
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch(API + '/diagnose_mat', { method:'POST', body: fd });
+    if(!r.ok){
+      const e = await r.json().catch(()=>({detail:'진단 실패 ('+r.status+')'}));
+      throw new Error(e.detail || ('진단 실패 ('+r.status+')'));
     }
-    if(!sig.length) throw new Error('Accelerometer 값을 못 읽었습니다.');
-    const r = await fetch(API + '/diagnose', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({signal: sig})
-    });
-    if(!r.ok) throw new Error('진단 실패 ('+r.status+')');
     render(await r.json());
   }catch(e){ showErr(e.message); }
   finally{ stopScan(); }

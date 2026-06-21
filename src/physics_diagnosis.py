@@ -33,10 +33,16 @@ if str(_ROOT) not in sys.path:
 from src.schemas import CrossCheck, FAULT_CLASSES, FaultLocation, PathCCnn, PathCPhysics, PathCResult
 from src.utils import load_config, resolve_path
 
-# CWRU 베어링 기하 (SKF 6205-2RS JEM). ✅ 고정값 — Smith & Randall(2015) 검증.
+# CWRU 베어링 기하 (SKF 6205-2RS JEM). ✅ Smith & Randall(2015) 검증값.
+# ⚠️ 이제 기본값은 config 의 cfg["bearing"] 에서 온다. 아래는 config 가 없을 때의 폴백.
 BEARING_6205 = {"N": 9, "Bd_mm": 7.938, "Pd_mm": 39.04, "alpha_deg": 0.0}
 
-_TARGET_SR = 12000  # 경로 C 기준 샘플링(고장 녹음은 전부 12k로 통일됨)
+_TARGET_SR = 12000  # 폴백 샘플링(cfg 없을 때만). 실제론 cfg["signal"]["base_sampling_rate"] 사용.
+
+
+def _fs(cfg: dict) -> int:
+    """파이프라인 기준 샘플링(Hz)을 config 에서 읽는다(없으면 폴백)."""
+    return int(cfg.get("signal", {}).get("base_sampling_rate", _TARGET_SR))
 
 
 # =============================================================
@@ -157,12 +163,13 @@ def diagnose_physics(
     판정: (기본 주파수 SNR≥임계) 또는 (고조파 2개 이상 존재) 인 위치 중 점수 최고.
           아무 위치도 조건을 못 채우면 location=None(못 잡음, 예: 볼).
     """
+    cfg = cfg or load_config()
     if rpm is None:
-        rpm = (cfg or load_config())["domain"]["rpm"]
+        rpm = cfg["domain"]["rpm"]
     if band == "auto":
         band = select_band(signal, fs)
     freqs, spec = envelope_spectrum(signal, fs, band)
-    fdefs = defect_frequencies(rpm)
+    fdefs = defect_frequencies(rpm, bearing=cfg.get("bearing", BEARING_6205))
 
     # 노이즈 바닥: 결함주파수가 사는 저주파 분석대역의 스펙트럼 중앙값(global 모드용)
     fmax = max(fdefs.values()) * (n_harmonics + 1)
@@ -284,7 +291,7 @@ def crosscheck_report(cfg: dict, model=None, model_path: str | Path | None = Non
     per_loc = {c: {"n": 0, "physics_hit": 0, "cnn_hit": 0, "agree": 0} for c in FAULT_CLASSES}
     rows: list[dict] = []
     for rec in recs:
-        res = diagnose_recording(rec.signal, _TARGET_SR, model, cfg)
+        res = diagnose_recording(rec.signal, _fs(cfg), model, cfg)
         verdict_count[res.cross_check.value] += 1
         truth = rec.location
         st = per_loc[truth]
@@ -334,7 +341,7 @@ def tune_physics(cfg: dict, snr_grid: tuple[float, ...] = (3.0, 4.0, 5.0),
             for snr in snr_grid:
                 hit = {c: [0, 0] for c in FAULT_CLASSES}
                 for rec in recs:
-                    r = diagnose_physics(rec.signal, _TARGET_SR, rpm=rpm, cfg=cfg,
+                    r = diagnose_physics(rec.signal, _fs(cfg), rpm=rpm, cfg=cfg,
                                          snr_thresh=snr, band=band, snr_mode=mode)
                     hit[rec.location][1] += 1
                     if r.location and r.location.value == rec.location:
@@ -385,7 +392,7 @@ def _main() -> None:
         print("\n→ overall·OR·B 보고 제일 좋은 조합을 diagnose_physics 기본값/호출인자로 쓰면 됨.")
         return
     rpm = cfg["domain"]["rpm"]
-    fs = 12000
+    fs = _fs(cfg)
 
     print("=== 경로 C① 물리 진단 자체 검증 ===")
     fdefs = defect_frequencies(rpm)
